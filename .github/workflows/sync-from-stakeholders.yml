@@ -91,9 +91,9 @@ jobs:
           gh pr create \
             --title "🔄 Sync from ${{ steps.stakeholder.outputs.name }}" \
             --body "**Pushed by:** @${{ github.event.client_payload.pusher }}  
-**Source:** https://github.com/${{ steps.stakeholder.outputs.repo }}/commit/${{ github.event.client_payload.sha }}
+            **Source:** https://github.com/${{ steps.stakeholder.outputs.repo }}/commit/${{ github.event.client_payload.sha }}
 
-Changes from ${{ steps.stakeholder.outputs.name }} repository." \
+            Changes from ${{ steps.stakeholder.outputs.name }} repository." \
             --base main \
             --head ${{ steps.branch.outputs.branch_name }} \
             --label "stakeholder-sync"
