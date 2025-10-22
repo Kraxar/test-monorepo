@@ -15,3 +15,7 @@ def transform_data(data):
     """Common data transformation logic"""
     data["processed"] = True
     return data
+
+def new_function():
+    """Test function"""
+    return "This is new!"
