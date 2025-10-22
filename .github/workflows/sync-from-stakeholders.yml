@@ -1,0 +1,112 @@
+name: Reverse Sync - Stakeholders to Monorepo (PR)
+
+on:
+  repository_dispatch:
+    types: [stakeholder-update]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  create-pr:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Determine stakeholder
+        id: stakeholder
+        run: |
+          STAKEHOLDER="${{ github.event.client_payload.stakeholder }}"
+          
+          case "$STAKEHOLDER" in
+            "stakeholder-a")
+              echo "name=stakeholder-a" >> $GITHUB_OUTPUT
+              echo "repo=Kraxar/test-stakeholder-a" >> $GITHUB_OUTPUT
+              echo "path=stakeholders/stakeholder-a" >> $GITHUB_OUTPUT
+              echo "branch=main" >> $GITHUB_OUTPUT
+              ;;
+            "stakeholder-b")
+              echo "name=stakeholder-b" >> $GITHUB_OUTPUT
+              echo "repo=Kraxar/test-stakeholder-b" >> $GITHUB_OUTPUT
+              echo "path=stakeholders/stakeholder-b" >> $GITHUB_OUTPUT
+              echo "branch=main" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "::error::Unknown stakeholder: $STAKEHOLDER"
+              exit 1
+              ;;
+          esac
+      
+      - name: Checkout monorepo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.STAKEHOLDER_SYNC_TOKEN }}
+      
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      
+      - name: Add stakeholder remote
+        run: |
+          git remote add stakeholder https://x-access-token:${{ secrets.STAKEHOLDER_SYNC_TOKEN }}@github.com/${{ steps.stakeholder.outputs.repo }}.git
+          git fetch stakeholder ${{ steps.stakeholder.outputs.branch }}
+      
+      - name: Create sync branch
+        id: branch
+        run: |
+          BRANCH_NAME="sync/${{ steps.stakeholder.outputs.name }}-$(date +%Y%m%d-%H%M%S)"
+          git checkout -b $BRANCH_NAME
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+      
+      - name: Pull changes
+        id: pull
+        continue-on-error: true
+        run: |
+          if git subtree pull \
+            --prefix=${{ steps.stakeholder.outputs.path }} \
+            stakeholder ${{ steps.stakeholder.outputs.branch }} \
+            --squash \
+            -m "Sync from ${{ steps.stakeholder.outputs.name }} by @${{ github.event.client_payload.pusher }}"; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            if git status | grep -q "Unmerged paths"; then
+              echo "status=conflict" >> $GITHUB_OUTPUT
+            else
+              echo "status=error" >> $GITHUB_OUTPUT
+            fi
+          fi
+      
+      - name: Push sync branch
+        run: |
+          git push origin ${{ steps.branch.outputs.branch_name }}
+      
+      - name: Create PR
+        if: steps.pull.outputs.status == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.STAKEHOLDER_SYNC_TOKEN }}
+        run: |
+          gh pr create \
+            --title "🔄 Sync from ${{ steps.stakeholder.outputs.name }}" \
+            --body "**Pushed by:** @${{ github.event.client_payload.pusher }}  
+**Source:** https://github.com/${{ steps.stakeholder.outputs.repo }}/commit/${{ github.event.client_payload.sha }}
+
+Changes from ${{ steps.stakeholder.outputs.name }} repository." \
+            --base main \
+            --head ${{ steps.branch.outputs.branch_name }} \
+            --label "stakeholder-sync"
+      
+      - name: Create conflict PR
+        if: steps.pull.outputs.status == 'conflict'
+        env:
+          GH_TOKEN: ${{ secrets.STAKEHOLDER_SYNC_TOKEN }}
+        run: |
+          gh pr create \
+            --title "⚠️ CONFLICTS: Sync from ${{ steps.stakeholder.outputs.name }}" \
+            --body "**Conflicts detected** - manual resolution required." \
+            --base main \
+            --head ${{ steps.branch.outputs.branch_name }} \
+            --label "conflicts" \
+            --draft
