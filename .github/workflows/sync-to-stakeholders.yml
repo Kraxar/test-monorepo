@@ -1,0 +1,94 @@
+name: Forward Sync - Monorepo to Stakeholders
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'stakeholders/**'
+      - 'shared/**'
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        stakeholder:
+          - name: "stakeholder-a"
+            path: "stakeholders/stakeholder-a"
+            repo: "Kraxar/test-stakeholder-a"
+            
+          - name: "stakeholder-b"
+            path: "stakeholders/stakeholder-b"
+            repo: "Kraxar/test-stakeholder-b"
+    
+    steps:
+      - name: Checkout monorepo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet ${{ github.event.before }} HEAD -- ${{ matrix.stakeholder.path }} shared/; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Configure git
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          git config --global user.name "Sync Bot"
+          git config --global user.email "bot@example.com"
+      
+      - name: Split stakeholder code
+        if: steps.changes.outputs.changed == 'true'
+        id: split
+        run: |
+          echo "Splitting code for ${{ matrix.stakeholder.name }}..."
+          SPLIT_SHA=$(git subtree split --prefix=${{ matrix.stakeholder.path }} --rejoin)
+          echo "split_sha=$SPLIT_SHA" >> $GITHUB_OUTPUT
+      
+      - name: Create combined repository
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          TEMP_DIR=$(mktemp -d)
+          cd $TEMP_DIR
+          
+          git init
+          git config user.name "Sync Bot"
+          git config user.email "bot@example.com"
+          
+          git pull $GITHUB_WORKSPACE ${{ steps.split.outputs.split_sha }}
+          
+          cp -r $GITHUB_WORKSPACE/shared .
+          git add shared/
+          git commit -m "Add shared utilities" || echo "No changes"
+          
+          echo "TEMP_DIR=$TEMP_DIR" >> $GITHUB_ENV
+      
+      - name: Push to stakeholder repository
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.STAKEHOLDER_SYNC_TOKEN }}
+        run: |
+          cd $TEMP_DIR
+          
+          git remote add target https://x-access-token:${GH_TOKEN}@github.com/${{ matrix.stakeholder.repo }}.git
+          git push target HEAD:main --force
+          
+          echo "✅ Synced ${{ matrix.stakeholder.name }}"
+      
+      - name: Push rejoin commits
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git push origin main || echo "No rejoin commits"
